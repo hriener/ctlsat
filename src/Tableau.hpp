@@ -1,0 +1,204 @@
+/*
+ * Tableau.h
+ *
+ *  Created on: May 28, 2014
+ *      Author: nicola
+ */
+
+#pragma once
+
+#include "common.hpp"
+#include "Formula.hpp"
+#include <algorithm>    // std::sort
+#include <set>
+#include <vector>
+
+namespace ctl_sat {
+
+class Tableau {
+public:
+	Tableau(Formula * f);//builds the tableau for formula f
+	bool isSatisfiable();//true iif f admits a model
+
+	uint numberOfStates(){return number_of_states;}//at each phase of the construction, this is the current number of states left.
+
+	virtual ~Tableau();
+
+private:
+
+	enum state_status {VISITED,NOT_VISITED,SATISFIED,NOT_SATISFIED};//status of states during dfs visit
+
+	struct FormulaLessThan {
+	  bool operator() (Formula * f1,Formula * f2) { return *f1 < *f2; }
+	} formulaLessThan;
+
+	struct FormulaEqual {
+	  bool operator() (Formula * f1,Formula * f2) { return *f1 == *f2; }
+	} formulaEqual;
+
+	// STEPS TO BUILD TABLEAU:
+
+	void computeSubFormulas();
+
+	void buildFeasibleStates();
+	void buildFeasibleStatesRecursive(state inserted, state polarity, formula_index formula_nr);
+
+	void handleConjunction(state inserted, state polarity, formula_index formula_nr);
+	void handleUntil(state inserted, state polarity, formula_index formula_nr);
+	void handleOtherCases(state inserted, state polarity, formula_index formula_nr);
+
+	bool checkEdgeConditionsType1(ulint i, ulint j, uint k);
+	bool checkEdgeConditionsType2(ulint i, ulint j, uint k);
+
+	void buildEdges();
+
+	void cull();
+
+	uint cullEasy();
+	uint cullMedium();
+	uint cullHard();
+	void cullEasyRecursive(uint i);
+	// -----------------------
+
+	void clearMarked();
+
+	//check cull rules:
+	bool checkEXT(ulint i);//i=index of state
+	bool checkEX(ulint i);//i=index of state
+	bool checkENX(ulint i);//i=index of state
+	bool checkEasy(ulint i);//check EXT,EX,ENX
+
+	bool checkEU(ulint i);
+	bool checkEUrecursive(ulint i,formula_index k, formula a, formula b);//k=index of the EU formula. a, b = sub-formulas
+	bool checkENU(ulint i);
+	bool checkENUrecursive(ulint i,formula a, formula b);
+	bool checkMedium(ulint i);
+
+	bool checkAU(ulint i);
+	bool checkAUrecursive(ulint i,formula a, formula b);
+
+	bool checkANU(ulint i);
+	bool checkANUrecursive(ulint i,formula a, formula b);
+
+	bool checkEformula(formula f, ulint s1, ulint s2);//check if existential formula f is valid in the states s1->s2
+	bool checkHard(ulint i);
+
+
+	void printState(state B);
+
+	uint indexOf(Formula * f);//returns index of the formula f in closure_set
+
+
+	//the type 'formula' is an integer representation of formulas in the closure set.
+	//if a is an index in positive closure, then (a+1) is the corresponding formula in positive version,
+	//while -(i+1) is the corresponding formula in negative version.
+	static formula indexToPositiveFormula(formula_index i){	return i+1; }
+	static formula indexToNegativeFormula(formula_index i){	return -(i+1);	}
+	static formula_index formulaToIndex(formula i){
+
+		if(i<0)
+			return -i-1;
+
+		return i-1;
+
+	}
+	static formula negateFormula(formula i){
+
+		bool positive = i>0;
+
+		if(positive)
+			return indexToNegativeFormula(formulaToIndex(i));
+
+		return indexToPositiveFormula(formulaToIndex(i));
+
+	}
+	static bool belongsTo(state B, formula i){
+
+		if(i<0)
+			return B.at(formulaToIndex(i))==0;
+
+		return B.at(formulaToIndex(i))==1;
+
+	}
+	static bool belongsTo(state inserted, state polarity, formula i){
+
+		if(not inserted.at(formulaToIndex(i)))
+			return false;
+
+		if(i<0)
+			return polarity.at(formulaToIndex(i))==false;
+
+		return polarity.at(formulaToIndex(i))==true;
+
+	}
+	static state insert(state B, formula i){
+
+		if(i<0)
+			B.at(formulaToIndex(i)) = false;
+		else
+			B.at(formulaToIndex(i)) = true;
+
+		return B;
+
+	}
+
+	void addEdge(uint i,uint j);//adds edge i->j and back-edge j->i
+
+	state newState();//returns a new state (i.e. vector of bool of length |positive_closure_set|)
+
+	void removeState(uint i);//removes state i and all entering and exiting edges
+	void removeGlobalMarks(uint i);//backtrack on the predecessors of i and clear their global marks (since i has been removed, global marks might not be valid anymore)
+	void removeGlobalMarksRecursive(uint i);//backtrack on the predecessors of i and clear their global marks (since i has been removed, global marks might not be valid anymore)
+
+        std::vector<Formula*> * positive_closure;//the formulas in lexicographic order. NB:only non-negated formulas are here (negated versions are implicit)
+
+	//for each i=0,...,positive_closure->size, memorize  sign*(index+1), where index is position of the positive subformula in positive_closure
+	//negative sign means that formula is negated
+	std::vector<formula> * leftSubformula;
+	std::vector<formula> * rightSubformula;
+
+	//each state S is a vector of bool of length |closure_set|
+	//if states[S][i]=true, then closure_set(i) is inside S
+	//if states[S][i]=false, then ~closure_set(i) is inside S
+        std::vector<state> states;
+
+	//the following vector is similar to states, but marks only EU, AU, ENU, ANU formulas
+	//that are valid on the whole model for that state.
+	//globally_satisfied_formulas_positive marks with a 1 the positive form of that formula, globally_satisfied_formulas_negative the negative.
+	//if globally_satisfied_formulas_positive[S][i] = true, then closure_set(i) is valid in state S
+	//if globally_satisfied_formulas_negative[S][i] = true, then ~closure_set(i) is valid in state S
+
+	std::vector<state> globally_satisfied_formulas_positive;
+	std::vector<state> globally_satisfied_formulas_negative;
+
+	std::vector<bool> visited_during_mark_removal;//state i was already visited recursively while removing global marks? (prevent loops)
+
+	ulint number_of_states;
+	ulint number_of_edges;
+
+	//edges: edges(i) is the list i_1,i_2,...,i_m such that there exists an edge from state i to each of the states i_1,i_2,...,i_m
+	std::vector<std::set<uint> > edges;
+
+	//back_edges: back_edges(i) is the list i_1,i_2,...,i_m such that there exists an edge from each of the states i_1,i_2,...,i_m to the state i
+	//introduced to backtrack effect of the cull
+	std::vector<std::set<uint> > back_edges;
+
+	//removed(i) = state in position i has been removed
+	std::vector<bool> isRemoved;
+
+	//std::vector<bool> * marked;//mark states during visits
+
+	state_status * status;//mark states during visits
+	std::vector<ulint> mark_timestamps;//remember marking timestamp
+	ulint current_timestamp;
+
+	ulint number_of_states_with_original_formula;//number of states that contain the original formula
+
+	formula initial_formula;
+
+	ulint last_time_printed;
+	time_t timestamp;
+
+};
+
+} // namespace ctl_sat
